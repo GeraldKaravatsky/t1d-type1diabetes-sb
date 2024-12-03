@@ -1,78 +1,112 @@
 package by.t1d.type1diabetes.service;
 
-import by.t1d.type1diabetes.database.DataBase;
-import by.t1d.type1diabetes.model.FoodIngestion;
+import by.t1d.type1diabetes.dao.CarbEntryDao;
+import by.t1d.type1diabetes.dto.ForecastResultDto;
+import by.t1d.type1diabetes.dto.GlucoseSubsystemDto;
+import by.t1d.type1diabetes.mapper.CarbEntryMapper;
+import by.t1d.type1diabetes.model.CarbEntry;
+import by.t1d.type1diabetes.util.GlucoseMathCalculation;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.*;
+import java.util.stream.Collectors;
 
 @RequiredArgsConstructor
 @Service
 public class GlucoseSubsystemServiceImpl implements GlucoseSubsystemService {
 
-    private static final int MOLECULE_GLUCOSE_WEIGHT = 180; // M_WG (Mmol)
+    private static final Long HOURS_IN_A_DAY = 24L;
 
-    private static final int MIN_MAX_TIME_CARBOHYDRATE_ABSORPTION = 40; // tauD (min)
+    private final CarbEntryDao carbEntryDao;
 
-    private static final double INDEX_OF_CARBOHYDRATE_BIO_ACTIVITY = 0.8; // AG (unitless)
+    private final CarbEntryMapper carbEntryMapper;
 
-    private static final int DAY_TIME = 1440; //количество минут в одном дне (отрезок дифференцирования)
-
-    private static final double STEP = 0.1;
-
-    private final DataBase dataBase;
+    private final ExecutorService executorService = Executors.newFixedThreadPool(Runtime.getRuntime().availableProcessors());
 
     @Override
-    public List<List<Double>> forecastGlucoseDistribution() {
-        FoodIngestion foodIngestion = dataBase.getFoodIngestion();
+    public GlucoseSubsystemDto forecastGlucoseDistributionAndAbsorption(GlucoseSubsystemDto subsystemDto) {
+        saveNewCarbEntry(subsystemDto);
 
-        List<Double> dTList = countInputGlucoseIndex(foodIngestion);
-        List<Double> tList = new ArrayList<>();
-        List<Double> D1List = new ArrayList<>();
-        List<Double> D2List = new ArrayList<>();
-        double D1 = 0;
-        double D2 = 0;
-        for (double t = 0; t <= DAY_TIME; t += STEP) {
-            tList.add(t);
-            double dT = t / foodIngestion.getIngestionTime() < 1 ? dTList.get((int) (t / STEP)) : 0;
-            double dD1dt = INDEX_OF_CARBOHYDRATE_BIO_ACTIVITY * dT - D1 / MIN_MAX_TIME_CARBOHYDRATE_ABSORPTION;
-            double dD2dt = (D1 - D2) / MIN_MAX_TIME_CARBOHYDRATE_ABSORPTION;
-            D1 += dD1dt * STEP;
-            D2 += dD2dt * STEP;
-            D1List.add(D1);
-            D2List.add(D2);
-        }
-        List<List<Double>> result = new ArrayList<>();
-        result.add(tList);
-        result.add(D1List);
-        result.add(D2List);
-        return result;
+        final List<ForecastResultDto> forecastResultListForEachCarbEntry = new CopyOnWriteArrayList<>();
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+        getEntriesFromLast24Hours(subsystemDto).forEach(
+                carbEntry -> {
+                    CompletableFuture<Void> future = CompletableFuture.supplyAsync(() ->
+                                    GlucoseMathCalculation.forecastGlucoseDistribution(carbEntry), executorService)
+                            .thenAccept(forecastResultDto -> forecastResultListForEachCarbEntry.add(
+                                    GlucoseMathCalculation.forecastGlucoseAbsorption(forecastResultDto)));
+                    futures.add(future);
+                }
+        );
+
+        futures.forEach(CompletableFuture::join);
+
+        fillGlucoseSubsystemDto(subsystemDto, forecastResultListForEachCarbEntry);
+
+        return subsystemDto;
     }
 
-    @Override
-    public List<List<Double>> forecastGlucoseAbsorption() {
-        List<List<Double>> glucoseDistribution = forecastGlucoseDistribution();
-        List<Double> tList = glucoseDistribution.get(0);
-        List<Double> d2List = glucoseDistribution.get(2);
-        List<Double> uGList = new ArrayList<>();
-        for (double d2 : d2List) {
-            uGList.add(d2 / MIN_MAX_TIME_CARBOHYDRATE_ABSORPTION);
+    private void saveNewCarbEntry(GlucoseSubsystemDto subsystemDto) {
+        if (subsystemDto.getIsCreateEntry()) {
+            carbEntryDao.save(carbEntryMapper.toEntity(subsystemDto));
         }
-        List<List<Double>> result = new ArrayList<>();
-        result.add(tList);
-        result.add(uGList);
-        return result;
     }
 
-    private List<Double> countInputGlucoseIndex(FoodIngestion foodIngestion) {
-        double v = foodIngestion.getCarbohydratesQuantity() / foodIngestion.getIngestionTime();
-        double dT = 1000 * v / MOLECULE_GLUCOSE_WEIGHT;
-        List<Double> dTList = new ArrayList<>();
-        for (double t = 0; t <= foodIngestion.getIngestionTime(); t += STEP) {
-            dTList.add(dT);
+    private List<CarbEntry> getEntriesFromLast24Hours(GlucoseSubsystemDto subsystemDto) {
+        LocalDateTime timeThreshold = LocalDateTime.now().minusHours(HOURS_IN_A_DAY);
+
+        List<CarbEntry> carbEntries = carbEntryDao.findEntriesFromLast24Hours(timeThreshold);
+
+        if (!subsystemDto.getIsCreateEntry()) {
+            //not entity, using only on math calculations
+            carbEntries.add(new CarbEntry(subsystemDto.getStartTime(),
+                    subsystemDto.getDuration(),
+                    subsystemDto.getCarbs()));
         }
-        return dTList;
+
+        return carbEntries;
     }
+
+    private void fillGlucoseSubsystemDto(GlucoseSubsystemDto subsystemDto,
+                                         List<ForecastResultDto> forecastResultListForEachCarbEntry) {
+        subsystemDto.setTList(forecastResultListForEachCarbEntry.get(0).getTList());
+
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+
+        CompletableFuture<Void> future = CompletableFuture.supplyAsync(() ->
+                        GlucoseMathCalculation.sumLists(forecastResultListForEachCarbEntry
+                                .stream()
+                                .map(ForecastResultDto::getD1List)
+                                .collect(Collectors.toList())), executorService)
+                .thenAccept(subsystemDto::setD1List);
+
+        futures.add(future);
+
+        future = CompletableFuture.supplyAsync(() ->
+                        GlucoseMathCalculation.sumLists(forecastResultListForEachCarbEntry
+                                .stream()
+                                .map(ForecastResultDto::getD2List)
+                                .collect(Collectors.toList())), executorService)
+                .thenAccept(subsystemDto::setD2List);
+
+        futures.add(future);
+
+        future = CompletableFuture.supplyAsync(() ->
+                        GlucoseMathCalculation.sumLists(forecastResultListForEachCarbEntry
+                                .stream()
+                                .map(ForecastResultDto::getUGList)
+                                .collect(Collectors.toList())), executorService)
+                .thenAccept(subsystemDto::setUGList);
+
+        futures.add(future);
+
+        futures.forEach(CompletableFuture::join);
+    }
+
 }

@@ -1,11 +1,11 @@
 package by.t1d.type1diabetes.service;
 
+import by.t1d.type1diabetes.dto.GlucoseSubsystemDto;
+
 import java.util.List;
 
 public interface GlucoseSubsystemService {
 
-    List<List<Double>> forecastGlucoseDistribution();
-
-    List<List<Double>> forecastGlucoseAbsorption();
+    GlucoseSubsystemDto forecastGlucoseDistributionAndAbsorption(GlucoseSubsystemDto subsystemDto);
 
 }

@@ -1,17 +1,15 @@
 package by.t1d.type1diabetes.controller;
 
-import by.t1d.type1diabetes.database.DataBase;
-import by.t1d.type1diabetes.model.FoodIngestion;
+import by.t1d.type1diabetes.dto.GlucoseSubsystemDto;
 import by.t1d.type1diabetes.service.GlucoseSubsystemService;
+import by.t1d.type1diabetes.util.ErrorMessage;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-
-import java.util.List;
 
 @RequestMapping("/glucose/subsystem")
 @RequiredArgsConstructor
@@ -20,31 +18,41 @@ public class GlucoseSubsystemController {
 
     private final GlucoseSubsystemService glucoseSubsystemService;
 
-    private final DataBase dataBase;
-
     @GetMapping
-    public String showChart() {
+    public String showChart(Model model) {
         // Отображение пустого графика при начальной загрузке страницы
-        return "chart";
+        return showEmptyChart(model);
     }
 
     @PostMapping
-    public String simulateGlucoseChart(@RequestParam("carbs") double carbs,
-                                       @RequestParam("duration") double duration,
+    public String simulateGlucoseChart(@ModelAttribute GlucoseSubsystemDto formData,
                                        Model model) {
-        dataBase.setFoodIngestion(new FoodIngestion(carbs, duration));
+        if (formData.getCarbs() < 0 || formData.getCarbs() > 551) {
+            model.addAttribute("errorMessage", ErrorMessage.INCORRECT_CARBS.getMessage());
+            return showEmptyChart(model);
+        }
 
-        final List<List<Double>> values = glucoseSubsystemService.forecastGlucoseDistribution();
+        if (formData.getDuration() < 0 || formData.getDuration() > 60) {
+            model.addAttribute("errorMessage", ErrorMessage.INCORRECT_DURATION.getMessage());
+            return showEmptyChart(model);
+        }
 
-        model.addAttribute("tDistributionValues", values.get(0));
-        model.addAttribute("d1DistributionValues", values.get(1));
-        model.addAttribute("d2DistributionValues", values.get(2));
+        final GlucoseSubsystemDto subsystemDto = glucoseSubsystemService.forecastGlucoseDistributionAndAbsorption(formData);
 
-        final List<List<Double>> absorptionValues = glucoseSubsystemService.forecastGlucoseAbsorption();
+        model.addAttribute("tValues", subsystemDto.getTList());
+        model.addAttribute("d1DistributionValues", subsystemDto.getD1List());
+        model.addAttribute("d2DistributionValues", subsystemDto.getD2List());
+        model.addAttribute("uGAbsorptionValues", subsystemDto.getUGList());
 
-        model.addAttribute("tAbsorptionValues", absorptionValues.get(0));
-        model.addAttribute("uGAbsorptionValues", absorptionValues.get(1));
+        model.addAttribute("formData", formData);
 
+        return "chart";
+    }
+
+    private String showEmptyChart(Model model) {
+        if (!model.containsAttribute("formData")) {
+            model.addAttribute("formData", new GlucoseSubsystemDto());
+        }
         return "chart";
     }
 
