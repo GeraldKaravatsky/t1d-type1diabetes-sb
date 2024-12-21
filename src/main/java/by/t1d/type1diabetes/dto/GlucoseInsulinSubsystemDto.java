@@ -7,13 +7,19 @@ import java.time.LocalDateTime;
 
 @EqualsAndHashCode(callSuper = true)
 @Data
-public class GlucoseSubsystemDto extends ForecastResultDto {
+public class GlucoseInsulinSubsystemDto extends ForecastGlucoseResultDto {
 
     private LocalDateTime startTime;
 
     private double carbs;
 
     private double duration;
+
+    private LocalDateTime startTimeI;
+
+    private double insulinDose;
+
+    private double durationI;
 
     private Boolean isCreateEntry;
 

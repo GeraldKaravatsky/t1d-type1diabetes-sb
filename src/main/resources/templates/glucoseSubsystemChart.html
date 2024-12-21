@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org">
+<head>
+    <title>Моделирование ввода пищи</title>
+
+    <style>
+        #loadingOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        #loadingOverlay p {
+            color: white;
+            font-size: 24px;
+        }
+    </style>
+
+    <script type="text/javascript" src="https://www.gstatic.com/charts/loader.js"></script>
+    <script type="text/javascript" th:inline="javascript">
+        document.addEventListener('DOMContentLoaded', function() {
+            google.charts.load('current', {'packages':['corechart']});
+            google.charts.setOnLoadCallback(() => {
+                setCurrentDateTime();
+                console.log("Google Charts loaded and DOM content fully loaded");
+            });
+        });
+
+        function submitForm(createEntry) {
+            if (event && typeof event.preventDefault === 'function') {
+                event.preventDefault();  // Предотвращает стандартное отправление формы
+            }
+
+            // Показать экран загрузки
+            document.getElementById('loadingOverlay').style.display = 'flex';
+
+            const form = document.getElementById('glucoseInsulinForm');
+            const formData = new FormData(form);
+
+            // Установим значение isCreateEntry
+            formData.set('isCreateEntry', createEntry);
+
+            fetch(form.action, {
+                method: 'POST',
+                body: formData
+            })
+                .then(response => response.json())
+                .then(result => {
+                    // Отрисовываем графики по одному с задержкой для улучшения производительности
+                    drawChartsSequentially(result);
+                });
+        }
+
+        function drawChartsSequentially(result) {
+            const charts = [
+                { tValues: result.tValues, dataValues: result.d1DistributionValues, yAxisName: 'D1', title: 'Количество глюкозы (D1, mmol) в желудке', elementId: 'distribution_chart1' },
+                { tValues: result.tValues, dataValues: result.d2DistributionValues, yAxisName: 'D2', title: 'Количество глюкозы (D2, mmol) в кишечнике', elementId: 'distribution_chart2' },
+                { tValues: result.tValues, dataValues: result.uGAbsorptionValues, yAxisName: 'UG', title: 'Показатель абсорции глюкозы (UG, mmol/min)', elementId: 'absorption_chart' },
+                { tValues: result.tValues, dataValues: result.fIValues, yAxisName: 'FI', title: 'Прием пищи', elementId: 'food_ingestion_chart' },
+                { tValues: result.tValues, dataValues: result.iIValues, yAxisName: 'II', title: 'Инъекция инсулина', elementId: 'insulin_injection_chart' },
+                { tValues: result.tValues, dataValues: result.s1Values, yAxisName: 'S1', title: 'S1 График', elementId: 's1_chart' },
+                { tValues: result.tValues, dataValues: result.s2Values, yAxisName: 'S2', title: 'S2 График', elementId: 's2_chart' },
+                { tValues: result.tValues, dataValues: result.uIValues, yAxisName: 'UI', title: 'UI График', elementId: 'ui_chart' },
+                { tValues: result.tValues, dataValues: result.iValues, yAxisName: 'I', title: 'I График', elementId: 'i_chart' },
+                { tValues: result.tValues, dataValues: result.x1Values, yAxisName: 'X1', title: 'X1 график', elementId: 'x1_chart' },
+                { tValues: result.tValues, dataValues: result.x2Values, yAxisName: 'X2', title: 'X2 график', elementId: 'x2_chart' },
+                { tValues: result.tValues, dataValues: result.x3Values, yAxisName: 'X3', title: 'X3 график', elementId: 'x3_chart' }
+            ];
+
+            let index = 0;
+
+            function drawNextChart() {
+                if (index < charts.length) {
+                    const chart = charts[index];
+                    console.log(`Drawing chart: ${chart.title}`);
+                    drawChart(chart.tValues, chart.dataValues, chart.yAxisName, chart.title, chart.elementId);
+                    index++;
+                    setTimeout(drawNextChart, 200); // Задержка перед отрисовкой следующего графика
+                } else {
+                    // Скрыть экран загрузки после отрисовки всех графиков
+                    document.getElementById('loadingOverlay').style.display = 'none';
+                }
+            }
+
+            drawNextChart();
+        }
+
+        async function drawChart(tValues, dataValues, yAxisName, title, chartElemId) {
+            console.log(`Drawing chart: ${title}`);
+            var data = new google.visualization.DataTable();
+            data.addColumn('datetime', 't');
+            data.addColumn('number', yAxisName);
+            for (var i = 0; i < tValues.length; i++) {
+                data.addRow([getDateFromMinutes(tValues[i] - 1440), dataValues[i]]);
+            }
+
+            var options = {
+                title: title,
+                curveType: 'function',
+                hAxis: {
+                    title: 't',
+                    format: 'yyyy-MM-dd HH:mm:ss',
+                    textPosition: 'none', // Скрытие текста оси X
+                    viewWindow: {
+                        min: getDateFromMinutes(-1440),
+                        max: getDateFromMinutes(1440)
+                    }
+                },
+                vAxis: { title: yAxisName },
+                legend: 'none'
+            };
+
+            var chartElement = document.getElementById(chartElemId);
+            if (chartElement) {
+                var chart = new google.visualization.LineChart(chartElement);
+                chart.draw(data, options);
+            } else {
+                console.error(`Element with id ${chartElemId} not found`);
+            }
+        }
+
+        function getCurrentTime() {
+            return new Date();
+        }
+
+        function getDateFromMinutes(minutes) {
+            var now = getCurrentTime();
+            now.setMinutes(now.getMinutes() + minutes);
+            return now;
+        }
+
+        function setCurrentDateTime() {
+            var now = new Date();
+            var formattedDateTime = now.toISOString().slice(0, 16);  // Формат для поля datetime-local
+            document.getElementById('startTime').value = formattedDateTime;
+            document.getElementById('startTimeI').value = formattedDateTime;
+        }
+
+    </script>
+</head>
+<body>
+<h1>Моделирование глюкозно-инсулинового взаимодействия</h1>
+
+<!-- Секция для отображения сообщений об ошибках -->
+<div th:if="${errorMessage}" style="color: red;">
+    <p th:text="${errorMessage}"></p>
+</div>
+
+<form id="glucoseInsulinForm" action="#" th:action="@{/glucose/subsystem}" th:object="${formData}" method="post">
+    <h2>Ввод пищи:</h2>
+    <label for="startTime">Время начала приема пищи:</label>
+    <input type="datetime-local" id="startTime" name="startTime" th:value="*{startTime}" required>
+    <br/>
+    <br/>
+    <label for="carbs">Вес поглощенной углеводной пищи (грамм):</label>
+    <input type="number" id="carbs" name="carbs" min="0" max="551" step="0.01" th:value="*{carbs}" required>
+    <br/>
+    <br/>
+    <label for="duration">Продолжительность приема пищи (минут):</label>
+    <input type="number" id="duration" name="duration" min="0" max="60" step="0.01" th:value="*{duration}" required>
+    <br/>
+    <br/>
+
+    <h2>Ввод инсулина:  </h2>
+    <label for="startTimeI">Время начала инъекции инсулина:</label>
+    <input type="datetime-local" id="startTimeI" name="startTimeI" th:value="*{startTimeI}" required>
+    <br/>
+    <br/>
+    <label for="insulinDose">Доза инсулина (mu):</label>
+    <input type="number" id="insulinDose" name="insulinDose" step="0.01" th:value="*{insulinDose}" required>
+    <br/>
+    <br/>
+    <label for="durationI">Продолжительность ввода инсулина (минут):</label>
+    <input type="number" id="durationI" name="durationI" min="0" max="60" step="0.01" th:value="*{durationI}" required>
+    <br/>
+    <br/>
+
+    <input type="hidden" id="isCreateEntry" name="isCreateEntry" th:value="*{isCreateEntry}" />
+    <button type="button" onclick="submitForm('true')">Создать запись и построить прогноз</button>
+    <button type="button" onclick="submitForm('false')">Построить прогноз без создания записи</button>
+</form>
+
+<div id="distribution_chart1" style="width: 900px; height: 500px"></div>
+<div id="distribution_chart2" style="width: 900px; height: 500px"></div>
+<div id="absorption_chart" style="width: 900px; height: 500px"></div>
+<div id="food_ingestion_chart" style="width: 900px; height: 500px"></div>
+<div id="insulin_injection_chart" style="width: 900px; height: 500px"></div>
+<div id="s1_chart" style="width: 900px; height: 500px"></div>
+<div id="s2_chart" style="width: 900px; height: 500px"></div>
+<div id="ui_chart" style="width: 900px; height: 500px"></div>
+<div id="i_chart" style="width: 900px; height: 500px"></div>
+<div id="x1_chart" style="width: 900px; height: 500px"></div>
+<div id="x2_chart" style="width: 900px; height: 500px"></div>
+<div id="x3_chart" style="width: 900px; height: 500px"></div>
+
+<div id="loadingOverlay"> <p>Пожалуйста, подождите, идет отрисовка графиков...</p> </div>
+
+</body>
+</html>
